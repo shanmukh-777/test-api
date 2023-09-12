@@ -1,0 +1,16 @@
+version: "3"
+services:
+  mtml-test-api:
+    image: mtml-test-api:v0.1
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+    ports:
+     - 8080:8080
+    
+    environment:
+      - GIN_MODE=release
+    volumes: 
+     - ./images:/app/images
+     - ./logs:/app/logs
+    

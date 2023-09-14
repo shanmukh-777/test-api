@@ -1,7 +1,7 @@
 version: "3"
 services:
   mtml-test-api:
-    image: mtml-test-api:v0.1
+    image: mtml-test-api:v0.2
     build:
       context: ./
       dockerfile: ./Dockerfile

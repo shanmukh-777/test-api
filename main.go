@@ -14,7 +14,7 @@ import (
 
 )
 type request struct {
-	Mimetype    string `json:"mime-type"`
+	Mimetype    string `json:"mime_type"`
 	Base64Image string `json:"base64_image"`
 }
 

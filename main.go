@@ -237,6 +237,10 @@ func CompareFaces(c *gin.Context){
 func CreateLive(c *gin.Context){
 
 	var livetoken liveliness
+	if err := c.ShouldBindJSON(&livetoken); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
 	mylivSession := session.Must(session.NewSession())
 	
 	liv := rekognition.New(mylivSession,awsConfig)
@@ -246,17 +250,17 @@ func CreateLive(c *gin.Context){
 	outputconfi:=rekognition.CreateFaceLivenessSessionRequestSettings{
 		AuditImagesLimit: &limit ,
 	}
-	livenessfaces:=rekognition.CreateFaceLivenessSessionInput{
+	input:=rekognition.CreateFaceLivenessSessionInput{
 		ClientRequestToken: &livetoken.Uniquetoken,
 		KmsKeyId:           &conf.kmsKeyId,
 		Settings:           &outputconfi,
 	}
-	responseB,err:=liv.CreateFaceLivenessSession( &livenessfaces)
+	responseB,err:=liv.CreateFaceLivenessSession( &input)
 	if err != nil{
 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"sessionID": responseB})
+	c.JSON(http.StatusOK, gin.H{"sessionID": responseB.SessionId})
 
 }
 

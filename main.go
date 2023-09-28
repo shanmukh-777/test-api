@@ -22,72 +22,54 @@ import (
 	_ "github.com/lib/pq"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
-
-// define structure of local citizen
 type localcitizen struct{
 	NicNum string `json:"nicNum"`
     DateOfBirth string `json:"dateOfBirth"`
     Gender string  `json:"gender"`
     UserType string `json:"userType"`
+	LiveImage string `json:"live_image"`
 }
-// Define structure for to take input of createlivelinesssession
-type liveliness struct{
-	NicNum string `json:"nicNum"`
-}
-// Define structure for to take input of livelinessSessionresult
-// delete image filed after testing
-type livelinessresult struct{
-	SessionId string `json:"session_id"`
-}
-// define structure of sessiontable
-type sessiontb struct{
-NicNum string 
-SessionId string
-Timestamp string
-}
-// define structure for response of login
-type successlogin struct{
-	AccessToken string
-	RefreshToken string
-	AccessTokenExpiry string
-}
-// define structure for customer respone
-type verifynicresponse struct{
-	CorrelationId string
-    NicNum string
-    FirstName string
-    LastName string
-    MaidenName string
-    DateOfBirth string
-    Photograph string
-}
-// define structure for livelinessfinaloutput
-// type livelinessfinaldata struct{
-// 	status string
-// 	confidence float64
-// }
-
-// define structure for sending final customer data
-type customerfinaldata struct{
-	NicNum string
-    FirstName string
-    LastName string
-    MaidenName string
-    DateOfBirth string
-}
-// define structure for aw conf
 type awsConf struct{
 	accessKey string
 	secretKey string
 	kmsKeyId string
 	region string
+}
+
+	// Define structure for to take input of livelinessSessionresult
+	// delete image filed after testing
+
+	// define structure of sessiontable
+
+	// define structure for response of login
+type successlogin struct{
+		AccessToken string
+		RefreshToken string
+		AccessTokenExpiry string
+	}
+	// define structure for customer respone
+type verifynicresponse struct{
+		CorrelationId string
+		NicNum string
+		FirstName string
+		LastName string
+		MaidenName string
+		DateOfBirth string
+		Photograph string
+	}
+
+	
+	// define structure for sending final customer data
+type customerfinaldata struct{
+		NicNum string
+		FirstName string
+		LastName string
+		MaidenName string
+		DateOfBirth string
 	}
 
 var conf awsConf
 var awsConfig *aws.Config
-// details required to connect to postgres database
-
-
 type env struct {
 	PostgresHost string   
 	PostgresPort  string
@@ -99,7 +81,6 @@ type env struct {
 	IntPort int
 }
 var envalues env
-
 func main() {
 
 	SetLogsfilepath()
@@ -135,12 +116,7 @@ func main() {
     // create a engine instance
 	router := gin.Default()
     // Define a route that accepts a details of local citizen
-    router.POST("/insert-citizen-details", InsertCitizenDetails)
-	// Define a route that accepts Nicnum and generates sessionid
-    router.POST("/create-liveliness-session", CreateLivelinessSession)
-    // Define a route that accepts sessionid and gives status of liveliness and similarity of face
-	router.POST("/liveliness-session-result",LivelinessSessionResult)
-
+    router.POST("/validate-customer", InsertCitizenDetails)
     // Run the server on port 8080
     router.Run(":8080")
 }
@@ -157,8 +133,6 @@ func SetLogsfilepath() {
 
 	log.Println("log file created")
 }
-
-// function to get access token,refresh token,expiry from mtml auth/login endpoint
 func GetAccessToken() (successlogin,error) {
 	client := resty.New()
 
@@ -316,185 +290,7 @@ func InsertCitizenDetails(c *gin.Context){
         return
     }
 	// creating a connection string for postgres
-
-	
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-    "password=%s dbname=%s sslmode=disable",
-    envalues.PostgresHost, envalues.IntPort, envalues.PostgresUser,envalues.PostgrePassword, envalues.PostgresDbname)
-	// opening a connection to database
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-	  c.JSON(http.StatusBadRequest,gin.H{"error":"unable to open connection to postgress","errormessage":err.Error()})
-	  log.Printf("err:%v",err.Error())
-	  return
-	}
-	defer db.Close()
-    // validate the connection
-	err = db.Ping()
-	if err != nil {
-		c.JSON(http.StatusBadRequest,gin.H{"error":"error while validating connection to postgress","errormessage":err.Error()})
-		log.Printf("err:%v",err.Error())
-		return
-	}
-	ctime:=time.Now()
-    sqlStatement := `
-    INSERT INTO localcitizens (nicnum, dateofbirth, gender, usertype ,time )
-    VALUES ($1,$2,$3,$4,$5)`
-    _, err = db.Exec(sqlStatement,details.NicNum,details.DateOfBirth,details.Gender,details.UserType,ctime)
-    if err != nil {
-		c.JSON(http.StatusBadRequest,gin.H{"error":"unable to write data into postgress","errormessage":err.Error()})
-		log.Printf("err:%v",err.Error())
-		return
-    }
-	c.JSON(http.StatusOK,gin.H{"status":"data of citizen saved successfully"})
-	log.Printf("data of citizen saved successfully")
-
-}
-func CreateLivelinessSession(c *gin.Context){
-
-	var livetoken liveliness
-	if err := c.ShouldBindJSON(&livetoken); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		log.Printf("err:%v",err.Error())
-        return
-    }
-	// initialization a new session
-	mylivSession := session.Must(session.NewSession())
-	// 
-	liv := rekognition.New(mylivSession,awsConfig)
-	
-	outputconfi:=rekognition.CreateFaceLivenessSessionRequestSettings{
-		AuditImagesLimit: aws.Int64(1) ,
-	}
-	input:=rekognition.CreateFaceLivenessSessionInput{
-		ClientRequestToken: &livetoken.NicNum,
-		KmsKeyId:           &conf.kmsKeyId,
-		Settings:           &outputconfi,
-	}
-	response,err:=liv.CreateFaceLivenessSession( &input)
-	if err != nil{
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		log.Printf("err:%v",err.Error())
-		return
-	}
-	// to take current timestamp
-	currentTime := time.Now()
-	// creating a connection string for postgres
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-	"password=%s dbname=%s sslmode=disable",
-	envalues.PostgresHost, envalues.IntPort, envalues.PostgresUser,envalues.PostgrePassword, envalues.PostgresDbname)
-	// opening a connection to database
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-	  c.JSON(http.StatusBadRequest,gin.H{"error":"unable to open connection to postgress","errormessage":err.Error()})
-	  log.Printf("err:%v",err.Error())
-	  return
-	
-	}
-	defer db.Close()
-	// validate the connection
-	err = db.Ping()
-	if err != nil {
-		c.JSON(http.StatusBadRequest,gin.H{"error":"error while validating connection to postgress","errormessage":err.Error()})
-		log.Printf("err:%v",err.Error())
-		return
-	}
-	sqlStatement := `
-	INSERT INTO sessions (nicnum, sessionid, time)
-	VALUES ($1,$2,$3)`
-	_, err = db.Exec(sqlStatement,livetoken.NicNum,response.SessionId,currentTime)
-	if err != nil {
-		c.JSON(http.StatusBadRequest,gin.H{"error":"unable to write data into postgress","errormessage":err.Error()})
-		log.Printf("err:%v",err.Error())
-		return
-	}
-	
-	c.JSON(http.StatusOK, gin.H{"sessionID": response.SessionId})
-	log.Printf("sessionid successfully created")
-
-}
-func LivelinessSessionResult(c *gin.Context){
-	var sessioninput livelinessresult
-	if err := c.ShouldBindJSON(&sessioninput); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		log.Printf("err:%v",err.Error())
-        return
-    }
-	myresSession := session.Must(session.NewSession())
-	livres := rekognition.New(myresSession,awsConfig)
-	liveinput:=rekognition.GetFaceLivenessSessionResultsInput{
-		SessionId: &sessioninput.SessionId,
-	}
-    outputres,err:=livres.GetFaceLivenessSessionResults(&liveinput)
-	if err != nil{
-		c.JSON(http.StatusBadRequest,gin.H{ "error": err.Error()})
-		log.Printf("err:%v",err.Error())
-		return
-	}
-	// results of livelinessresult functionality of aws rekognition 
-	// to get value of confidence use outputres.Confidence
-	// to get value of status use outputres.Status
-	// uncomment below after testing
-	livimage:=outputres.ReferenceImage.Bytes
-	liveimage:=string(livimage)
-	
-	
-    psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
-	"password=%s dbname=%s sslmode=disable",
-	envalues.PostgresHost, envalues.IntPort, envalues.PostgresUser,envalues.PostgrePassword, envalues.PostgresDbname)
-	// opening a connection to database
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-	  c.JSON(http.StatusBadRequest,gin.H{"error":"unable to open connection to postgress","errormessage":err.Error()})
-	  log.Printf("err:%v",err.Error())
-	  return
-	
-	}
-	defer db.Close()
-	// validate the connection
-	err = db.Ping()
-	if err != nil {
-		c.JSON(http.StatusBadRequest,gin.H{"error":"error while validating connection to postgress","errormessage":err.Error()})
-		log.Printf("err:%v",err.Error())
-		return
-	}
-	// variable to store below query result
-	var resultrowsession sessiontb
-	// query to get data from seesion table using sessionid from request
-	sqlforsessiontable := `
-	SELECT * FROM sessions WHERE sessionid=($1) order by time desc limit 1`
-	err = db.QueryRow(sqlforsessiontable,sessioninput.SessionId).Scan(&resultrowsession.NicNum,&resultrowsession.SessionId,&resultrowsession.Timestamp)
-	if err != nil {
-        if err == sql.ErrNoRows {
-			c.JSON(http.StatusBadRequest,gin.H{"error":"no rows found in session table"})
-			log.Printf("err:%v",err.Error())
-        } else {
-			c.JSON(http.StatusBadRequest,gin.H{"error":"error while quering to sessionstable","errormessage":err.Error()})
-			log.Printf("err:%v",err.Error())
-        }
-        return
-    }
-	log.Printf("queried data from sessions")
-	// variable to store below query result
-	var resultrowcitizen localcitizen
-	var citizentime string
-	// query to get data from localcitizens table using nicnum from abouve query result
-	sqlforlocalcitizentable := `
-	SELECT * FROM localcitizens WHERE nicnum=($1) order by time desc limit 1`
-	err = db.QueryRow(sqlforlocalcitizentable,resultrowsession.NicNum).Scan(&resultrowcitizen.NicNum,&resultrowcitizen.DateOfBirth,&resultrowcitizen.Gender,&resultrowcitizen.UserType,&citizentime)
-	if err != nil {
-        if err == sql.ErrNoRows {
-            c.JSON(http.StatusBadRequest,gin.H{"error":"no rows found in localcitizens table"})
-			log.Printf("err:%v",err.Error())
-        } else {
-			c.JSON(http.StatusBadRequest,gin.H{"error":"error while quering to sessionstable","errormessage":err.Error()})
-			log.Printf("err:%v",err.Error())
-        }
-        return
-    }
-	log.Printf("queried data from localcitizens")
-	// calling login endpoint of mtmtl api
-	tokendata,err:=GetAccessToken()
+    tokendata,err:=GetAccessToken()
 	if err != nil {
 		c.JSON(http.StatusBadRequest,gin.H{"error":err.Error()})
 		log.Printf("err:%v",err.Error())
@@ -519,19 +315,17 @@ func LivelinessSessionResult(c *gin.Context){
 
 	}
 	// data of a customer from mtml endpoint 
-	customer,err:=GetCustomerData(tokendata.AccessToken,resultrowcitizen)
+	customer,err:=GetCustomerData(tokendata.AccessToken,details)
 	if err != nil {
 		c.JSON(http.StatusBadRequest,gin.H{"error":err.Error()})
 		log.Printf("err:%v",err.Error())
 		return
 	}
 	log.Printf("customer data recieved succesful")
+	liveimage:=details.LiveImage
 	refimage:=customer.Photograph
-
-	// similarityThreshold := &faces.similaritythres
-	// facesrequest.SetSimilarityThreshold(*similarityThreshold)
-	//source image
-	// delete below line after testing
+	myresSession := session.Must(session.NewSession())
+	livres := rekognition.New(myresSession,awsConfig)
 	sourcebytes,err := base64.StdEncoding.DecodeString(liveimage)
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot decode b64"})
@@ -570,7 +364,6 @@ func LivelinessSessionResult(c *gin.Context){
 	}
 	// similarity and confidence of compare faces functionality of aws rekognition are stored in faceDetails.Similarity and faceDetails.Face.Confidence
 	faceDetails:= resu.FaceMatches[0]
-    // final sending data of a customer as a response
 	sendingcustomerdata:=customerfinaldata{
 		NicNum: customer.NicNum,
 		FirstName: customer.FirstName,
@@ -578,18 +371,41 @@ func LivelinessSessionResult(c *gin.Context){
 		MaidenName: customer.MaidenName,
 		DateOfBirth: customer.DateOfBirth,
 	}
-	
-	c.JSON(http.StatusOK,gin.H{"liveliness result": gin.H{
-		"status": outputres.Status,
-		"confidence": outputres.Confidence,
-	    },
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+    "password=%s dbname=%s sslmode=disable",
+    envalues.PostgresHost, envalues.IntPort, envalues.PostgresUser,envalues.PostgrePassword, envalues.PostgresDbname)
+	// opening a connection to database
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+	  c.JSON(http.StatusBadRequest,gin.H{"error":"unable to open connection to postgress","errormessage":err.Error()})
+	  log.Printf("err:%v",err.Error())
+	  return
+	}
+	defer db.Close()
+    // validate the connection
+	err = db.Ping()
+	if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":"error while validating connection to postgress","errormessage":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	ctime:=time.Now()
+    sqlStatement := `
+    INSERT INTO localcitizens (nicnum, dateofbirth, gender, usertype,image,time)
+    VALUES ($1,$2,$3,$4,$5,$6)`
+    _, err = db.Exec(sqlStatement,details.NicNum,details.DateOfBirth,details.Gender,details.UserType,liveimage,ctime)
+    if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":"unable to write data into postgress","errormessage":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+    }
+	log.Printf("data of citizen saved successfully")
+	c.JSON(http.StatusOK,gin.H{
       "comparefaces result": gin.H{
 		"similarity":faceDetails.Similarity,
 		"confidence":faceDetails.Face.Confidence,
 		} ,
        "customer details": sendingcustomerdata})
 	log.Printf("liveliness,compareface and customer data successfully sent")
-	
+
 }
-
-

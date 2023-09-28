@@ -276,7 +276,6 @@ func GetCustomerData(token string,data localcitizen) (verifynicresponse,error) {
 	responseBody := response.Body()
 	
 	// accesstoken:=access.
-	fmt.Println("Response:", string(responseBody))
 	// var res map[string]interface{}
 	var customerdata verifynicresponse
 	json.Unmarshal(responseBody,&customerdata); 

@@ -1,71 +1,127 @@
 package main
 
 import (
-	"bytes"
+	"database/sql"
 	"encoding/base64"
-	"image/jpeg"
-	"image/png"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
+
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/rekognition"
 	"github.com/gin-gonic/gin"
+	"github.com/go-resty/resty/v2"
+	_ "github.com/lib/pq"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
-type request struct {
-	Mimetype    string `json:"mime_type"`
-	Base64Image string `json:"base64_image"`
+
+// define structure of local citizen
+type localcitizen struct{
+	NicNum string `json:"nicNum"`
+    DateOfBirth string `json:"dateOfBirth"`
+    Gender string  `json:"gender"`
+    UserType string `json:"userType"`
+}
+// Define structure for to take input of createlivelinesssession
+type liveliness struct{
+	NicNum string `json:"nicNum"`
+}
+// Define structure for to take input of livelinessSessionresult
+// delete image filed after testing
+type livelinessresult struct{
+	SessionId string `json:"session_id"`
+	Image string `json:"live_image"`
+}
+// define structure of sessiontable
+type sessiontb struct{
+NicNum string 
+SessionId string
+Timestamp string
+}
+// define structure for response of login
+type successlogin struct{
+	AccessToken string
+	RefreshToken string
+	AccessTokenExpiry string
+}
+// define structure for customer respone
+type verifynicresponse struct{
+	CorrelationId string
+    NicNum string
+    FirstName string
+    LastName string
+    MaidenName string
+    DateOfBirth string
+    Photograph string
+}
+// define structure for livelinessfinaloutput
+type livelinessfinaldata struct{
+	status string
+	confidence float64
 }
 
-
-type facescompare struct{
-	Liveface string `json:"live_face"`
-	Referface string `json:"ref_face"`
-	similaritythres float64 `json:"sim_thres"`
+// define structure for sending final customer data
+type customerfinaldata struct{
+	NicNum string
+    FirstName string
+    LastName string
+    MaidenName string
+    DateOfBirth string
 }
-
+// define structure for aw conf
 type awsConf struct{
-accessKey string
-secretKey string
-kmsKeyId string
-region string
-}
-type liveliness struct {
-	Uniquetoken string `json:"unique_token"`
-}
+	accessKey string
+	secretKey string
+	kmsKeyId string
+	region string
+	}
 
 var conf awsConf
 var awsConfig *aws.Config
+// details required to connect to postgres database
+const (
+	host     = "localhost"
+	port     = 5432
+	user     = "user"
+	password = "password"
+	dbname   = "postgres"
+  )
 func main() {
 
 	SetLogsfilepath()
-
+    //read  environment variable  values for aws config
 	conf.accessKey=os.Getenv("AWS_ACCESS_KEY")
     conf.secretKey=os.Getenv("AWS_SECRET_KEY")
 	conf.kmsKeyId=os.Getenv("KMS_KEY_ID")
 	conf.region=os.Getenv("AWS_REGION")
-   
+    // create empty config 
 	awsConfig=aws.NewConfig()
+	// create a object using static credentials method 
 	creds:=credentials.NewStaticCredentials(conf.accessKey,conf.secretKey,"")
+	// assign the created object to above created empty config
 	awsConfig.WithCredentials(creds)
 	awsConfig.WithRegion(conf.region)
+    
+    // create a engine instance
+	router := gin.Default()
+    // Define a route that accepts a details of local citizen
+    router.POST("/insert-citizen-details", InsertCitizenDetails)
+	// Define a route that accepts Nicnum and generates sessionid
+    router.POST("/create-liveliness-session", CreateLivelinessSession)
+    // Define a route that accepts sessionid and gives status of liveliness and similarity of face
+	router.POST("/liveliness-session-result",LivelinessSessionResult)
 
-    // Define a route that accepts a Base64 encoded image
-    router := gin.Default()
-    router.POST("/insert-image", InsertBase64Image)
-	router.POST("/compare-face", CompareFaces)
-    router.POST("/create-liveliness-session", CreateLive)
-	// router.GET("/create-kmskey",CreateK)
     // Run the server on port 8080
     router.Run(":8080")
 }
-
-
 func SetLogsfilepath() {
 
 	log.SetOutput(&lumberjack.Logger{
@@ -80,103 +136,382 @@ func SetLogsfilepath() {
 	log.Println("log file created")
 }
 
+// function to get access token,refresh token,expiry from mtml auth/login endpoint
+func GetAccessToken() (successlogin,error) {
+	client := resty.New()
 
-func InsertBase64Image(c *gin.Context) {
-    // Get the Base64 encoded image data from the request body
-	var req request
+	// Set the base URL of the Swagger-documented API
+	apiURL := "https://simapi.icta.mu/icta" // Replace with the actual API URL
 
+	// Specify the endpoint you want to access
+	endpoint1 := "/auth/login" // Replace with the actual endpoint
 
-    if err := c.ShouldBindJSON(&req); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
-    }
-
-
-	unbased, err := base64.StdEncoding.DecodeString(req.Base64Image)
-    if err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot decode b64"})
-		return
-	}
-    if req.Mimetype == "image/png" {
-		r := bytes.NewReader(unbased)
-		im, err := png.Decode(r)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "bad png"})
-			log.Printf("err:%v",err.Error())
-			return
-		}
-
-	
-		f, err := os.OpenFile("./images/example.png", os.O_WRONLY|os.O_CREATE, 0777)
-    	if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot open file for png"})
-			log.Printf("err:%v",err.Error())
-
-        	return
-   		 }
-		err =png.Encode(f,im)
-		if err != nil{
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write png image"})
-			log.Printf("err:%v",err.Error())
-
-			return
-		}
-	}else if req.Mimetype == "image/jpeg"{
-		q :=bytes.NewReader(unbased)
-		imm ,err := jpeg.Decode(q)
-		if err != nil{
-			c.JSON(http.StatusBadRequest, gin.H{"error": "bad png"})
-			log.Printf("err:%v",err.Error())
-
-			return
-		}
-
-		fi,err :=os.OpenFile("./images/exp"+time.Now().String()+".jpeg",os.O_WRONLY|os.O_CREATE, 0777)
-    	if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Cannot open file for jpeg"})
-			log.Printf("err:%v",err.Error())
-
-        	return
-   		 }	
-		err = jpeg.Encode(fi,imm,nil)
-		if err != nil{
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write jpeg image"})
-			log.Printf("err:%v",err.Error())
-
-			return
-		}		
-
-
-	}else{
-		c.JSON(http.StatusBadRequest,gin.H{
-			"error":"unknown mime type",
-		})
-		log.Print("err: unknown mime type")
-		return 
+	// Define the request body (assuming it's JSON)
+	requestBody1 := map[string]interface{}{
+		"password": "oKAt2W&E!0D8",
+		"username": "mtml",
 	}
 
-    // Respond with a success message
-    c.JSON(http.StatusOK, gin.H{"message": "Image saved successfully"})
-	log.Printf("Image saved successfully")
+	// Send a POST request with headers and a request body
+	response, err := client.R().
+		// SetHeaders(headers).
+		SetBody(requestBody1).
+		Post(apiURL + endpoint1)
+
+	if err != nil {
+		// fmt.Println("Error:", err)
+		return successlogin{},errors.New("error while sending post request to auth/login api endpoint")
+	}
+
+	// Check the HTTP status code
+	if response.StatusCode() != 200 {
+		stat:=response.StatusCode()
+		return successlogin{},errors.New("auth/login api returned a non-200 status code"+strconv.Itoa(stat))
+	}
+    
+	// Process the response body (assuming it's JSON)
+	responseBody := response.Body()
+	var res map[string]interface{}
+	json.Unmarshal(responseBody,&res); 
+	accesstoken:= res["accessToken"].(string)
+	refreshtoken:=res["refreshToken"].(string)
+	accesstokenexpiry:=res["accessTokenExpiryDate"].(string)
+	tokenresponse:=successlogin{
+		AccessToken: accesstoken,
+		RefreshToken: refreshtoken,
+		AccessTokenExpiry: accesstokenexpiry,
+
+	}
+	return tokenresponse,nil
 
 }
-func CompareFaces(c *gin.Context){
-	var faces facescompare
+// function to get new acccess token using refresh token endpoint 
+func GetNewAccessToken(reftoken string) (successlogin,error) {
+	client := resty.New()
+
+	// Set the base URL of the Swagger-documented API
+	apiURL := "https://simapi.icta.mu/icta" // Replace with the actual API URL
+
+	// Specify the endpoint you want to access
+	endpoint2 := "/auth/refreshToken" // Replace with the actual endpoint
+
+	// Define the request body (assuming it's JSON)
+	requestBody2 := map[string]interface{}{
+		"refreshToken": reftoken,
+	}
+
+	// Send a POST request with headers and a request body
+	response, err := client.R().
+		// SetHeaders(headers).
+		SetBody(requestBody2).
+		Post(apiURL + endpoint2)
+
+	if err != nil {
+		return successlogin{},errors.New("error while sending post request to auth/refreshToken api endpoint")
+	}
+
+	// Check the HTTP status code
+	if response.StatusCode() != 200 {
+		stat:=response.StatusCode()
+		return successlogin{},errors.New("auth/refrshtoken api returned a non-200 status code"+  strconv.Itoa(stat))
+	}
+    
+	// Process the response body (assuming it's JSON)
+	responseBody := response.Body()
+	var res map[string]interface{}
+	json.Unmarshal(responseBody,&res); 
+	accesstoken:= res["accessToken"].(string)
+	refreshtoken:=res["refreshToken"].(string)
+	accesstokenexpiry:=res["accessTokenExpiryDate"].(string)
+	tokenresponse:=successlogin{
+		AccessToken: accesstoken,
+		RefreshToken: refreshtoken,
+		AccessTokenExpiry: accesstokenexpiry,
+
+	}
+	return tokenresponse,nil
+
+}
+func GetCustomerData(token string,data localcitizen) (verifynicresponse,error) {
+	client := resty.New()
+
+	// Set the base URL of the Swagger-documented API
+	apiURL := "https://simapi.icta.mu/icta" // Replace with the actual API URL
+
+	// Specify the endpoint you want to access
+	endpoint3 := "/verifyNIC" // Replace with the actual endpoint
+
+	// Define request headers
+	auth:= "Bearer"+"  "+token
+	headers := map[string]string{
+		 
+		 // Adjust the content type as needed
+		"Content-Type":  "application/json",
+	    "Authorization": auth,  // Replace with your access token  
+	    
+	}
+
+	requestBody3:= map[string]interface{}{
+	    "nicNum": data.NicNum,
+        "dateOfBirth": data.DateOfBirth,
+        "gender": data.Gender,
+        "userType": data.UserType,
+	}
+
+	// Send a POST request with headers and a request body
+	response, err := client.R().
+		SetHeaders(headers).
+		SetBody(requestBody3).
+		Post(apiURL + endpoint3)
+
+	if err != nil {
+		return verifynicresponse{},errors.New("error while sending post request to verifyNic api endpoint")
+	}
+
+	// Check the HTTP status code
+	if response.StatusCode() != 200 {
+		stat:=response.StatusCode() 
+		return verifynicresponse{},errors.New("auth/login api returned a non-200 status code"+strconv.Itoa(stat))
+
+	}
+
+	// Process the response body (assuming it's JSON)
+	responseBody := response.Body()
 	
-    if err := c.ShouldBindJSON(&faces); err != nil {
+	// accesstoken:=access.
+	fmt.Println("Response:", string(responseBody))
+	// var res map[string]interface{}
+	var customerdata verifynicresponse
+	json.Unmarshal(responseBody,&customerdata); 
+	return customerdata,nil
+
+}
+func InsertCitizenDetails(c *gin.Context){
+	var details localcitizen
+	if err := c.ShouldBindJSON(&details); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
-    mySession := session.Must(session.NewSession())
+	// creating a connection string for postgres
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+    "password=%s dbname=%s sslmode=disable",
+    host, port, user, password, dbname)
+	// opening a connection to database
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+	  c.JSON(http.StatusBadRequest,gin.H{"error":"unable to open connection to postgress","errormessage":err.Error()})
+	  log.Printf("err:%v",err.Error())
+	  return
+	}
+	defer db.Close()
+    // validate the connection
+	err = db.Ping()
+	if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":"error while validating connection to postgress","errormessage":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	ctime:=time.Now()
+    sqlStatement := `
+    INSERT INTO localcitizens (nicnum, dateofbirth, gender, usertype ,time )
+    VALUES ($1,$2,$3,$4,$5)`
+    _, err = db.Exec(sqlStatement,details.NicNum,details.DateOfBirth,details.Gender,details.UserType,ctime)
+    if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":"unable to write data into postgress","errormessage":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+    }
+	c.JSON(http.StatusOK,gin.H{"status":"data of citizen saved successfully"})
+	log.Printf("data of citizen saved successfully")
+
+}
+func CreateLivelinessSession(c *gin.Context){
+
+	var livetoken liveliness
+	if err := c.ShouldBindJSON(&livetoken); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Printf("err:%v",err.Error())
+        return
+    }
+	// initialization a new session
+	mylivSession := session.Must(session.NewSession())
+	// 
+	liv := rekognition.New(mylivSession,awsConfig)
 	
-	svc := rekognition.New(mySession, awsConfig)
+	outputconfi:=rekognition.CreateFaceLivenessSessionRequestSettings{
+		AuditImagesLimit: aws.Int64(1) ,
+	}
+	input:=rekognition.CreateFaceLivenessSessionInput{
+		ClientRequestToken: &livetoken.NicNum,
+		KmsKeyId:           &conf.kmsKeyId,
+		Settings:           &outputconfi,
+	}
+	response,err:=liv.CreateFaceLivenessSession( &input)
+	if err != nil{
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	// to take current timestamp
+	currentTime := time.Now()
+	// creating a connection string for postgres
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+	"password=%s dbname=%s sslmode=disable",
+	host, port, user, password, dbname)
+	// opening a connection to database
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+	  c.JSON(http.StatusBadRequest,gin.H{"error":"unable to open connection to postgress","errormessage":err.Error()})
+	  log.Printf("err:%v",err.Error())
+	  return
+	
+	}
+	defer db.Close()
+	// validate the connection
+	err = db.Ping()
+	if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":"error while validating connection to postgress","errormessage":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	sqlStatement := `
+	INSERT INTO sessions (nicnum, sessionid, time)
+	VALUES ($1,$2,$3)`
+	_, err = db.Exec(sqlStatement,livetoken.NicNum,response.SessionId,currentTime)
+	if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":"unable to write data into postgress","errormessage":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	
+	c.JSON(http.StatusOK, gin.H{"sessionID": response.SessionId})
+	log.Printf("sessionid successfully created")
+
+}
+func LivelinessSessionResult(c *gin.Context){
+	var sessioninput livelinessresult
+	if err := c.ShouldBindJSON(&sessioninput); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Printf("err:%v",err.Error())
+        return
+    }
+	myresSession := session.Must(session.NewSession())
+	livres := rekognition.New(myresSession,awsConfig)
+	liveinput:=rekognition.GetFaceLivenessSessionResultsInput{
+		SessionId: &sessioninput.SessionId,
+	}
+    outputres,err:=livres.GetFaceLivenessSessionResults(&liveinput)
+	if err != nil{
+		c.JSON(http.StatusBadRequest,gin.H{ "error": err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	// results of livelinessresult functionality of aws rekognition 
+	// to get value of confidence use outputres.Confidence
+	// to get value of status use outputres.Status
+	// uncomment below after testing
+	// livimage:=outputres.ReferenceImage.Bytes
+	// liveimage:=string(livimage)
+	
+	
+    psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
+	"password=%s dbname=%s sslmode=disable",
+	host, port, user, password, dbname)
+	// opening a connection to database
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+	  c.JSON(http.StatusBadRequest,gin.H{"error":"unable to open connection to postgress","errormessage":err.Error()})
+	  log.Printf("err:%v",err.Error())
+	  return
+	
+	}
+	defer db.Close()
+	// validate the connection
+	err = db.Ping()
+	if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":"error while validating connection to postgress","errormessage":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	// variable to store below query result
+	var resultrowsession sessiontb
+	// query to get data from seesion table using sessionid from request
+	sqlforsessiontable := `
+	SELECT * FROM sessions WHERE sessionid=($1) order by time desc limit 1`
+	err = db.QueryRow(sqlforsessiontable,sessioninput.SessionId).Scan(&resultrowsession.NicNum,&resultrowsession.SessionId,&resultrowsession.Timestamp)
+	if err != nil {
+        if err == sql.ErrNoRows {
+			c.JSON(http.StatusBadRequest,gin.H{"error":"no rows found in session table"})
+			log.Printf("err:%v",err.Error())
+        } else {
+			c.JSON(http.StatusBadRequest,gin.H{"error":"error while quering to sessionstable","errormessage":err.Error()})
+			log.Printf("err:%v",err.Error())
+        }
+        return
+    }
+	log.Printf("queried data from sessions")
+	// variable to store below query result
+	var resultrowcitizen localcitizen
+	var citizentime string
+	// query to get data from localcitizens table using nicnum from abouve query result
+	sqlforlocalcitizentable := `
+	SELECT * FROM localcitizens WHERE nicnum=($1) order by time desc limit 1`
+	err = db.QueryRow(sqlforlocalcitizentable,resultrowsession.NicNum).Scan(&resultrowcitizen.NicNum,&resultrowcitizen.DateOfBirth,&resultrowcitizen.Gender,&resultrowcitizen.UserType,&citizentime)
+	if err != nil {
+        if err == sql.ErrNoRows {
+            c.JSON(http.StatusBadRequest,gin.H{"error":"no rows found in localcitizens table"})
+			log.Printf("err:%v",err.Error())
+        } else {
+			c.JSON(http.StatusBadRequest,gin.H{"error":"error while quering to sessionstable","errormessage":err.Error()})
+			log.Printf("err:%v",err.Error())
+        }
+        return
+    }
+	log.Printf("queried data from localcitizens")
+	// calling login endpoint of mtmtl api
+	tokendata,err:=GetAccessToken()
+	if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	log.Printf("token recieved succesful")
+
+	currentTime := time.Now()
+	// checking the expire of access token
+	if currentTime.String() > tokendata.AccessTokenExpiry {
+		// calling refresh token endpoint of mtml using function
+		newtokendata,err:=GetNewAccessToken(tokendata.RefreshToken)
+		if err != nil {
+			c.JSON(http.StatusBadRequest,gin.H{"error":err.Error()})
+			log.Printf("err:%v",err.Error())
+			return
+		}
+		tokendata.AccessToken=newtokendata.AccessToken
+		tokendata.RefreshToken=newtokendata.RefreshToken
+		tokendata.AccessTokenExpiry=newtokendata.AccessTokenExpiry
+		log.Printf("token refresh succesful")
+
+	}
+	// data of a customer from mtml endpoint 
+	customer,err:=GetCustomerData(tokendata.AccessToken,resultrowcitizen)
+	if err != nil {
+		c.JSON(http.StatusBadRequest,gin.H{"error":err.Error()})
+		log.Printf("err:%v",err.Error())
+		return
+	}
+	log.Printf("customer data recieved succesful")
+	refimage:=customer.Photograph
 
 	// similarityThreshold := &faces.similaritythres
 	// facesrequest.SetSimilarityThreshold(*similarityThreshold)
 	//source image
-	sourcebytes,err := base64.StdEncoding.DecodeString(faces.Liveface)
+	// delete below line after testing
+	liveimage:=sessioninput.Image
+	sourcebytes,err := base64.StdEncoding.DecodeString(liveimage)
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot decode b64"})
+		log.Printf("err:%v",err.Error())
 		return
 	}
 	sourceImage := rekognition.Image{
@@ -184,9 +519,10 @@ func CompareFaces(c *gin.Context){
 	}
 	// facesrequest.SetSourceImage(&sourceImage)
 	//reference image
-	refbytes,err := base64.StdEncoding.DecodeString(faces.Referface)
+	refbytes,err := base64.StdEncoding.DecodeString(refimage)
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot decode b64"})
+		log.Printf("err:%v",err.Error())
 		return
 	}
 	refImage := rekognition.Image{
@@ -197,75 +533,39 @@ func CompareFaces(c *gin.Context){
     facesRequest := rekognition.CompareFacesInput {
 		SourceImage: &sourceImage,
 		TargetImage: &refImage,
-		SimilarityThreshold: &faces.similaritythres,	
+		SimilarityThreshold: aws.Float64(70),	
 			}	
 
 
 
-	res,err:=svc.CompareFaces(&facesRequest)
+	resu,err:=livres.CompareFaces(&facesRequest)
 	if err !=nil{
         c.JSON(http.StatusBadRequest, gin.H{"error": "error while sending api request to aws"})
+		log.Printf("err:%v",err.Error())
 		return
 	}
-	faceDetails:= res.FaceMatches[0]
-	sim:=faceDetails.Similarity
-	conf:=faceDetails.Face.Confidence
-    c.JSON(http.StatusOK, gin.H{"similarity": sim,
-          "confidence": conf })
-	
-}	
-// func CreateK(c *gin.Context){
-// 	mylivSession := session.Must(session.NewSession())
-//     kmsge:=kms.New(mylivSession)
-	
-// 	input:=kms.CreateKeyInput{
-// 		Description: aws.String("my kms key") ,
-// 		KeyUsage: aws.String("ENCRYPT_DECRYPT"),
-
-// 	}
-// 	resut,err:=kmsge.CreateKey(&input)
-// 	if err !=nil{
-// 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
-// 		return	
-// 	}
-// 	keyi:=resut.KeyMetadata.KeyId
-// 	c.JSON(http.StatusOK,gin.H{"keyid": keyi})
-
-// }
-
-
-func CreateLive(c *gin.Context){
-
-	var livetoken liveliness
-	if err := c.ShouldBindJSON(&livetoken); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
-    }
-	mylivSession := session.Must(session.NewSession())
-	
-	liv := rekognition.New(mylivSession,awsConfig)
-	
-	
-	limit:=int64(1)
-	outputconfi:=rekognition.CreateFaceLivenessSessionRequestSettings{
-		AuditImagesLimit: &limit ,
+	// similarity and confidence of compare faces functionality of aws rekognition are stored in faceDetails.Similarity and faceDetails.Face.Confidence
+	faceDetails:= resu.FaceMatches[0]
+    // final sending data of a customer as a response
+	sendingcustomerdata:=customerfinaldata{
+		NicNum: customer.NicNum,
+		FirstName: customer.FirstName,
+		LastName: customer.LastName,
+		MaidenName: customer.MaidenName,
+		DateOfBirth: customer.DateOfBirth,
 	}
-	input:=rekognition.CreateFaceLivenessSessionInput{
-		ClientRequestToken: &livetoken.Uniquetoken,
-		KmsKeyId:           &conf.kmsKeyId,
-		Settings:           &outputconfi,
-	}
-	responseB,err:=liv.CreateFaceLivenessSession( &input)
-	if err != nil{
-		c.JSON(http.StatusBadRequest, gin.H{"error": err})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"sessionID": responseB.SessionId})
-
+	
+	c.JSON(http.StatusOK,gin.H{"liveliness result": gin.H{
+		"status": outputres.Status,
+		"confidence": outputres.Confidence,
+	    },
+      "comparefaces result": gin.H{
+		"similarity":faceDetails.Similarity,
+		"confidence":faceDetails.Face.Confidence,
+		} ,
+       "customer details": sendingcustomerdata})
+	log.Printf("liveliness,compareface and customer data successfully sent")
+	
 }
 
-
-    
-
-	
 

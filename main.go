@@ -38,7 +38,6 @@ type liveliness struct{
 // delete image filed after testing
 type livelinessresult struct{
 	SessionId string `json:"session_id"`
-	Image string `json:"live_image"`
 }
 // define structure of sessiontable
 type sessiontb struct{
@@ -410,8 +409,8 @@ func LivelinessSessionResult(c *gin.Context){
 	// to get value of confidence use outputres.Confidence
 	// to get value of status use outputres.Status
 	// uncomment below after testing
-	// livimage:=outputres.ReferenceImage.Bytes
-	// liveimage:=string(livimage)
+	livimage:=outputres.ReferenceImage.Bytes
+	liveimage:=string(livimage)
 	
 	
     psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
@@ -507,7 +506,6 @@ func LivelinessSessionResult(c *gin.Context){
 	// facesrequest.SetSimilarityThreshold(*similarityThreshold)
 	//source image
 	// delete below line after testing
-	liveimage:=sessioninput.Image
 	sourcebytes,err := base64.StdEncoding.DecodeString(liveimage)
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot decode b64"})

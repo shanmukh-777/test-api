@@ -62,10 +62,10 @@ type verifynicresponse struct{
     Photograph string
 }
 // define structure for livelinessfinaloutput
-type livelinessfinaldata struct{
-	status string
-	confidence float64
-}
+// type livelinessfinaldata struct{
+// 	status string
+// 	confidence float64
+// }
 
 // define structure for sending final customer data
 type customerfinaldata struct{
@@ -86,13 +86,20 @@ type awsConf struct{
 var conf awsConf
 var awsConfig *aws.Config
 // details required to connect to postgres database
-const (
-	host     = "localhost"
-	port     = 5432
-	user     = "user"
-	password = "password"
-	dbname   = "postgres"
-  )
+
+
+type env struct {
+	PostgresHost string   
+	PostgresPort  string
+	PostgresUser     string
+	PostgrePassword  string
+	PostgresDbname  string
+	MtmlUser string
+	MtmlPassword string
+	IntPort int
+}
+var envalues env
+
 func main() {
 
 	SetLogsfilepath()
@@ -101,6 +108,22 @@ func main() {
     conf.secretKey=os.Getenv("AWS_SECRET_KEY")
 	conf.kmsKeyId=os.Getenv("KMS_KEY_ID")
 	conf.region=os.Getenv("AWS_REGION")
+	envalues.PostgresHost=os.Getenv("POSTGRES_HOST")
+	envalues.PostgresPort=  os.Getenv("POSTGRES_PORT")
+	envalues.PostgresUser=os.Getenv("POSTGRES_USER")
+	envalues.PostgrePassword=  os.Getenv("POSTGRES_PASSWORD")
+	envalues.PostgresDbname=os.Getenv("POSTGRES_DBNAME")
+	envalues.MtmlUser=os.Getenv("MTML_USER")
+	envalues.MtmlPassword=os.Getenv("MTML_PASSWORD")
+	port,err :=strconv.Atoi(envalues.PostgresPort)
+	if err != nil {
+		log.Printf("err:%v",err.Error())
+		return
+	  }
+	envalues.IntPort=port
+
+
+
     // create empty config 
 	awsConfig=aws.NewConfig()
 	// create a object using static credentials method 
@@ -146,11 +169,10 @@ func GetAccessToken() (successlogin,error) {
 	endpoint1 := "/auth/login" // Replace with the actual endpoint
 
 	// Define the request body (assuming it's JSON)
-	mtmluser:=os.Getenv("MTML_USER")
-	mtmlpassword:=os.Getenv("MTML_PASSWORD")
+
 	requestBody1 := map[string]interface{}{
-		"password": mtmlpassword,
-		"username": mtmluser,
+		"password": envalues.MtmlPassword,
+		"username": envalues.MtmlUser,
 	}
 
 	// Send a POST request with headers and a request body
@@ -294,9 +316,11 @@ func InsertCitizenDetails(c *gin.Context){
         return
     }
 	// creating a connection string for postgres
+
+	
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
     "password=%s dbname=%s sslmode=disable",
-    host, port, user, password, dbname)
+    envalues.PostgresHost, envalues.IntPort, envalues.PostgresUser,envalues.PostgrePassword, envalues.PostgresDbname)
 	// opening a connection to database
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
@@ -358,7 +382,7 @@ func CreateLivelinessSession(c *gin.Context){
 	// creating a connection string for postgres
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
 	"password=%s dbname=%s sslmode=disable",
-	host, port, user, password, dbname)
+	envalues.PostgresHost, envalues.IntPort, envalues.PostgresUser,envalues.PostgrePassword, envalues.PostgresDbname)
 	// opening a connection to database
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
@@ -417,7 +441,7 @@ func LivelinessSessionResult(c *gin.Context){
 	
     psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
 	"password=%s dbname=%s sslmode=disable",
-	host, port, user, password, dbname)
+	envalues.PostgresHost, envalues.IntPort, envalues.PostgresUser,envalues.PostgrePassword, envalues.PostgresDbname)
 	// opening a connection to database
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {

@@ -146,9 +146,11 @@ func GetAccessToken() (successlogin,error) {
 	endpoint1 := "/auth/login" // Replace with the actual endpoint
 
 	// Define the request body (assuming it's JSON)
+	mtmluser:=os.Getenv("MTML_USER")
+	mtmlpassword:=os.Getenv("MTML_PASSWORD")
 	requestBody1 := map[string]interface{}{
-		"password": "oKAt2W&E!0D8",
-		"username": "mtml",
+		"password": mtmlpassword,
+		"username": mtmluser,
 	}
 
 	// Send a POST request with headers and a request body
@@ -203,7 +205,7 @@ func GetNewAccessToken(reftoken string) (successlogin,error) {
 	response, err := client.R().
 		// SetHeaders(headers).
 		SetBody(requestBody2).
-		Post(apiURL + endpoint2)
+		Put(apiURL + endpoint2)
 
 	if err != nil {
 		return successlogin{},errors.New("error while sending post request to auth/refreshToken api endpoint")
